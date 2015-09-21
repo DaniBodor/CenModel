@@ -15,7 +15,17 @@ STUFF TO ADD IN THE FUTURE
 
 
 - gaussian blur does not need to create 0s out of 1s in Chro (this is fixed by reload checker in G1 phase)
-  - test the number of reload events if the above is true
+    - test the number of reload events if the above is true
+
+
+- parameter test situation:
+    - criteria:
+            - Cen maintenance (in fraction CA)
+            - No 2y Cen appearance (how to test this?)
+    - for working parameter set: 
+        - create dictionary with key being tuple of parameter sets and value is the final (and initial??) Chro
+    - for working AND not-working parameter sets
+        - export them to a txt file with an OK/FAIL key (can later be used to create 2D/3D representation of working sets)
 
 
 ultimately:
@@ -37,6 +47,7 @@ import pylab as plt
 from S_phase_methods import Sphase_oneloop as SphaseExt
 from G1_phase_methods import *
 import time, sys
+from scipy.ndimage.filters import gaussian_filter1d as gf1d
 #from matplotlib import rc
 #rc('text', usetex=True)
 
@@ -48,11 +59,11 @@ CenL = int(5e3)                		# length of centromere (=Cen) in nucleosomes; T
 initCA_Cen = 0.04   				# fraction of initial CA on Cen; TRUE NUMBER ~0.04
 initCenPos = 0.3    				# defines where Cen is located on Chro (from left to right)
 erosion = 0     #or: initCA_Chro		# UNUSED # CA loss other than redistribution. Can also be introduced as 'temperature' to erode and reload at low frequency throughout
-divs = 200	         				# number of cycles through S and G1 phase
+divs = 120	         				# number of cycles through S and G1 phase
 critical = initCA_Chro                  # the level of CA at which the sim breaks because CEN is lost
-sigma = 5                              # used for gaussian blur (or other gaussian function)
-gausspow = 1                            # power to raise the gaussian to (1 means no effect)
-gaussOffset = 0                         # used to offset peak of nascent CA recruitment
+sigma = 3                              # used for gaussian blur (or other gaussian function); must be smaller than gaussOffset to displace max pos
+gaussOffset = 10                         # used to offset peak of nascent CA recruitment, must be larger than sigma to displace max pos
+gausspow = 3                            # power to raise the gaussian to (1 means no effect)
 start = time.time()
 resetChro = True                     # if False, Chro will be initialized with the final outcome of the precious run
 
@@ -114,16 +125,28 @@ def Sphase(Chro):
 # During G1phase, CENP-A is replenished onto empty (H3) nucleosome positions
 # Rules for replenishment remain unclear!
 #	need some density dependent rules to recruit CA to the proper site in the Chrosome
-def G1phase(Chro,G1method=GaussBlurG1,power=1):
+def G1phase(Chro):
     ''' Gaussian blur (or other method) of Chro is made which functions as the blueprint for the chance of nascent
     CENP-A incorporation. 
     The Distribution is only made once at the beginning of G1 phase, meaning that nascent CENP-A does not 
     guide more nascent CENP-A incorporation. This makes the code a lot faster.
     A method was built in to ensure that there is no 'reloading' of CENP-A at any given position'''
-   
-    Distrib = G1method(Chro,sigma,sigrange=0,returnPDF=True)    # retrieves a gaussian conversion of Chro, based on specific G1 method from G1_phase+methods library
-    if power != 1:                          # >1 makes the distribution favor clusters (at least in theory)
-        Distrib = np.power(Distrib,[power]*len(Distrib))
+
+    # Create Offset array which will be used to calculate the frequency distribution of nascent CA loading    
+    if gaussOffset:
+        OffsetChro = np.zeros(ChroL)
+        for nuc in xrange(ChroL):
+            if Chro[nuc] == 1:
+                if nuc >= gaussOffset:     OffsetChro[nuc-gaussOffset] += 0.5
+                if nuc < ChroL-gaussOffset:    OffsetChro[nuc+gaussOffset] += 0.5
+    else: OffsetChro = np.array(Chro)
+
+    # Create frequency distribution based on gaussian blurred
+    Distrib = gf1d( [float(i) for i in OffsetChro] , sigma, mode='constant')     #this line is no longer outsourced to G1_phase_Methods file!
+    Distrib = [max(0,i) for i in (Distrib - Chro)]                              # convert 1s in Chro to 0s in Distrib so that there is not reloading of CA at old positions
+
+    if gausspow != 1:                          # >1 makes the distribution favor clusters (at least in theory)
+        Distrib = np.power(Distrib,[gausspow]*len(Distrib))
     Distrib /= sum(Distrib)/efficiency      # normailizes the distribution to sum to efficiency (i.e. random numbers above efficiency will not lead to CA incorporation)
     Cumulative = np.cumsum(Distrib)         # converts the distribution to a cumulative distribution list
     
@@ -300,7 +323,7 @@ for currentDiv in xrange(divs) :
     
     '''G1 PHASE --> RELOADING OF CA'''
     preG1 = time.time()
-    Chro,reloads = G1phase(Chro,power=gausspow)
+    Chro,reloads = G1phase(Chro)
     postG1 += time.time()-preG1
     
     ChroCounts.append(CountCA(Chro))
@@ -332,6 +355,7 @@ FractionPlot(ChroCounts,CenCounts)  # ask graph of CENP-A over time
 print '*********************************************'
 
 print 'Sigma:', sigma
+print 'Offset:', gaussOffset
 if gausspow != 1: print 'Gaussian raised to power:', gausspow
 if currentDiv+1 < divs:
     divs = currentDiv
